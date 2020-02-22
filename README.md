@@ -3,6 +3,7 @@ This repository contains three R scripts:
 1) MDU2_Proj.R where input information specific to different wildfires is provided and from which the other scripts can be ran automatically.
 2) MDU_2_r-script_new.R which is the main R script for the raster calculations. The data is processed to a point shapefile and exported as a .csv table
 3) MDU_2_stats.R which serves for the statistical calculations and visualization of the data.
+4) NDVI_intercalibration.R which was used for the intercalibration of Landsat 8 and Landsat 5 derived NDVI.
 
 In order to run the scripts, the following data has to be provided in a specific file structure:
 wd = Working directory
