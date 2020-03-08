@@ -1,7 +1,7 @@
 #############################################
 ##### Load packages
 #############################################
-packages <- c("rgdal","caret","raster","foreign", "kernlab", "colorRamps", "landsat", "tiff", "sf", "rgeos", "profvis")
+packages <- c("rgdal","caret","raster","foreign", "kernlab", "colorRamps", "landsat", "tiff", "sf", "rgeos", "profvis", "svMisc", "lubridate")
 for(i in 1:NROW(packages)){
   if (!require(packages[i], character.only= TRUE)) {
     install.packages(packages[i])
@@ -14,22 +14,7 @@ options(stringsAsFactors = FALSE)
 #############################################
 ##### Set directories
 #############################################
-if(Sys.info()['sysname'] == "Windows"){
-  # paths Win
-  wd <- "D:/Dateien/Studium_KIT/Master_GOEK/7_FS_Geooekologie/Methoden_der_Umweltforschung_2/Projekt"
-  dir_Landsat_data <- paste(wd, "/Landsat", sep = "")
-  dir_shapefile <- paste(wd, "/Landsat/shapefile/", fire_name, sep = "")
-  db <- "C:/Users/Manuel/Dropbox"
-}else if(Sys.info()['sysname'] == "Linux"){
-  # paths Lin
-  wd <- "/media/manuel/MANU/Studium_KIT/Master_GOEK/Methoden_der_Umweltforschung_2/Projekt"
-  dir_Landsat_data <- paste(wd, "/Landsat", sep = "")
-  dir_shapefile <- paste(wd, "/Landsat/shapefile/", fire_name, sep = "")
-  db <- "/home/manuel/Dropbox"
-}else{
-  print("Error: OS not identified.")
-}
-VegMapDate <- 2010
+dir_shapefile <- paste(wd, "/Landsat/shapefile/", fire_name, sep = "")
 if(VegMapDate == 2001){
   NOAACCAP <- paste(wd, "/QGIS/NOAA/2001/", sep = "")
 }else if(VegMapDate == 2006){
@@ -40,22 +25,22 @@ if(VegMapDate == 2001){
   cat(paste("There is no data available for the date ", VegMapDate,
             ".\nTry 2001, 2006 or 2010.", sep = ""))
 }
+if(prior == 2001){
+  NOAACCAPp <- paste(wd, "/QGIS/NOAA/2001/", sep = "")
+}else if(prior == 2006){
+  NOAACCAPp <- paste(wd, "/QGIS/NOAA/2006/", sep = "")
+}else if(is.na(prior)){
+  print("No prior landcover information selected.")
+}else{
+  cat(paste("There is no data available for the date ", prior,
+            ".\nTry 2001, 2006 or NA.", sep = ""))
+}
 
 dir.create(paste(wd, "/output", sep = ""))
 dir.create(paste(wd, "/output/", fire_name, sep = ""))
 out_dir <- paste(wd, "/output/", fire_name, sep = "")
 dir.create(paste(wd, "/r-script", sep = ""))
 dir.create(paste(wd, "/paper", sep = ""))
-
-# backup copies
-file.copy(paste(db, "/MDU_2_r-script_new.R", sep = ""),
-          paste(wd, "/r-script/MDU_2_r-script_new.R", sep = ""),
-          overwrite = TRUE
-          )
-file.copy(paste(db, "/MDU2_Proj.R", sep = ""),
-          paste(wd, "/r-script/MDU2_Proj.R", sep = ""),
-          overwrite = TRUE
-)
 
 #############################################
 ##### Load, stack and clip Landsat data
@@ -115,6 +100,7 @@ pre <- 1
 post <- 1
 if(TRUE){ # calculate burned area based on NBR
   threshold <- 0.1
+  nonthreshold <- 0
   if(pre == 1){
     preImage <- raster_stacks[[which(names(raster_stacks)==pre_fire_pic1)]]
   }else{
@@ -127,12 +113,16 @@ if(TRUE){ # calculate burned area based on NBR
   }
   preNBR <- raster::overlay(preImage[[4]], preImage[[6]],
                             fun = function(x,y){return((x-y)/(x+y))})
-  postNBR <- raster::overlay(preImage[[4]], postImage[[6]],
+  postNBR <- raster::overlay(postImage[[4]], postImage[[6]],######################## hier war Aenderung! postImage[[4]] war vorher preImage 
                              fun = function(x,y){return((x-y)/(x+y))})
   burned_area <- raster::overlay(x = preNBR,
                                 y = postNBR, fun = function(x, y){
                                 x-y >= threshold
                                                })
+  nonburned_area <- raster::overlay(x = preNBR,
+                                 y = postNBR, fun = function(x, y){
+                                   x-y <= nonthreshold
+                                 })
 }else{ # calculate burned area based on NDVI
   LS05_NDVI <- vector(mode = "list", length = NROW(dirs_LS05_data))
   
@@ -159,18 +149,13 @@ if(TRUE){ # calculate burned area based on NBR
 #plot(burned_area)
 
 # transform to polygon
-overwrite_burned_areaSHP <- TRUE
-if(!file.exists(paste(out_dir, "/burned_areas/burned.shp", sep = ""))&&overwrite_burned_areaSHP){
+if(!file.exists(paste(out_dir, "/burned_areas/burned.shp", sep = ""))||overwrite_burned_areaSHP){
 burned_poly <- rasterToPolygons(burned_area, fun = function(x){x >= threshold}, n = 4, na.rm = TRUE, digits = 12, dissolve = TRUE)
 bp_sf <- st_as_sf(burned_poly)
-pause(0.5)
 bps_sf <- st_cast(bp_sf, "POLYGON")
-pause(0.5)
 BpSf <- bps_sf[as.numeric(st_area(bps_sf))>=50000,]
-pause(0.5)
 
 BpSt <- as(BpSf, 'Spatial')
-pause(0.5)
 
 # export burned area as polygon
 dir.create(paste(out_dir, "/burned_areas", sep = ""))
@@ -188,35 +173,89 @@ if(!exists("BpSt")){
 }
 
 # get burned area as a raster layer
-burnedArea <- mask(burned_area, mask = BpSt)
+burned_area@data@values <- as.numeric(burned_area@data@values)
+nonburned_area@data@values <- as.numeric(nonburned_area@data@values)
+nonburned_area[nonburned_area == 0] <- NA
+nonburned_Area <- -nonburned_area
+Burned_Area <- mask(burned_area, mask = BpSt)
+Burned_Area@data@values <- as.numeric(Burned_Area@data@values)
+burnedArea <- merge(Burned_Area, nonburned_Area)
+rm(burned_area)
+rm(burned_Area)
+rm(nonburned_area)
+rm(nonburned_Area)
+
 # export raster
 writeRaster(burnedArea, paste(out_dir, "/burned_areas/burned_area.tif", sep = ""), format = "GTiff", overwrite = TRUE)
 
 #############################################
 ##### Get landcover information from NOAA C-CAP data
 #############################################
-rm(Vega)
-rm(Vegb)
-if(tryCatch(!is.null(crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), BpSt)),
+if(!file.exists(paste(out_dir, "/editedNOAA/CCAP.tif", sep = ""))||overwrite_NOAA){
+  dir.create(paste(out_dir, "/editedNOAA/", sep = ""))
+  if(exists("Vega")){
+    rm(Vega)
+  }
+  if(exists("Vegap")){
+    rm(Vegap)
+  }
+ if(exists("Vegb")){
+   rm(Vegb) 
+ }
+ if(exists("Vegbp")){
+   rm(Vegbp) 
+ }
+if(tryCatch(!is.null(crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), ext)),
             error=function(e) return(FALSE))){
-  Vega <- crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), BpSt)
-  NAvalue(Vega) <- 0
+  Vega <- crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), ext)
+  Vegap <- crop(raster(list.files(NOAACCAPp, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), ext)
+  #NAvalue(Vega) <- 0
 }
-if(tryCatch(!is.null(crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[2]), BpSt)),
+if(tryCatch(!is.null(crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[2]), ext)),
             error=function(e) return(FALSE))){
-  Vegb <- crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), BpSt)
-  NAvalue(Vegb) <- 0
+  Vegb <- crop(raster(list.files(NOAACCAP, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), ext)
+  Vegbp <- crop(raster(list.files(NOAACCAPp, pattern="\\.tif$", full.names = T, ignore.case = TRUE)[1]), ext)
+  #NAvalue(Vegb) <- 0
 }
 if(exists("Vega")&&exists("Vegb")){
   VegCover <- merge(Vega, Vegb)
+  VegCoverp <- merge(Vegap, Vegbp)
 }else if(exists("Vega")){
   VegCover <- Vega
+  VegCoverp <- Vegap
 }else if(exists("Vegb")){
   VegCover <- Vegb
+  VegCoverp <- Vegbp
+}
+# Set values for landcover that changed after the fire to 0
+VegCover[VegCover != VegCoverp] <- 0
+rm(VegCoverp)
+VegCover <- crop(VegCover, ext)
+# check for potential mixed pixels (boundaries between classes), queen's case (8 neighbours)
+tmpVC <- VegCover
+pxls <- VegCover@ncols*VegCover@nrows
+for(n in 1:pxls){
+  val <- extract(VegCover, n)
+  nghbrs <- extract(VegCover, adjacent(VegCover, cells = n, directions = 8)[,2])
+  if(isTRUE(all(val == nghbrs))){
+    tmpVC[n] <- val
+  }else if(!isTRUE(all(val == nghbrs))){
+    tmpVC[n] <- 0
+  }
+  progress(n, progress.bar = TRUE, max.value = pxls)
 }
 
+VegCover <- tmpVC
+rm(tmpVC)
 vals <- as.factor(VegCover@data@values)
 VegClasses <- levels(vals)
+VegCover1 <- VegCover
+VegCover1@data@values <- as.numeric(VegCover1@data@values)
+writeRaster(VegCover1, filename = paste(out_dir, "/editedNOAA/CCAP.tif", sep = ""), overwrite = TRUE)
+rm(VegCover1)
+}else if(file.exists(paste(out_dir, "/editedNOAA/CCAP.tif", sep = ""))){
+  VegCover <- raster(paste(out_dir, "/editedNOAA/CCAP.tif", sep = ""))
+}
 VegCover@data@values <- as.factor(VegCover@data@values)
 #VegCover <- projectRaster(VegCover, burned_area)
 #plot(VegCover)
@@ -248,14 +287,14 @@ pointsTemplate <- rasterToPoints(RasterTemplate, spatial = TRUE)
 #############################################
 points <- raster::extract(VegCover, pointsTemplate, sp = TRUE)
 names(points) <- c("id", "CCAP_2010")
-#points@data$CCAP_2010 <- as.factor(points@data$CCAP_2010)
+points@data$CCAP_2010 <- as.factor(points@data$CCAP_2010)
 
 #############################################
 ##### Assign burned/ not burned to point layer
 #############################################
 temp <- raster::extract(burnedArea$layer, pointsTemplate, sp = TRUE)
 names(temp) <- c("id", "layer")
-points$burned <- as.logical(temp$layer)
+points$burned <- as.numeric(temp$layer) #as.logical(temp$layer)
 
 #############################################
 ##### Crop Landsat05 tiles
@@ -361,7 +400,8 @@ for(i in 1:NROW(dirs_LS08_data)){
 LS08_NDVI <- vector(mode = "list", length = NROW(dirs_LS08_data))
 
 for(i in 1:NROW(dirs_LS08_data)){
-  LS08_NDVI[[i]] <- raster::overlay(raster_stacks08[[i]][[5]], raster_stacks08[[i]][[4]], fun = function(x,y){return((x-y)/(x+y))})
+  LS08_NDVI[[i]] <- raster::overlay(raster_stacks08[[i]][[5]],
+                                    raster_stacks08[[i]][[4]], fun = function(x,y){return((x-y)/(x+y))})
 }
 names(LS08_NDVI) <- names(raster_stacks08)
 
@@ -403,5 +443,5 @@ writeOGR(
 )
 write.csv2(
   points@data,
-  paste(out_dir, "/", "/points/Points.csv", sep = "")
+  paste(out_dir, "/", "/points/Points.csv", sep = ""), row.names = FALSE
 )
